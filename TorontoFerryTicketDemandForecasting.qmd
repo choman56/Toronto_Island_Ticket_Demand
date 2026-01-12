@@ -1,0 +1,98 @@
+---
+title: "Toronto Ferry Ticket Demand Forecasting"
+format: html
+editor: visual
+---
+
+```{r}
+# The `echo: false` option disables the printing of code (only output 
+# is displayed).
+#| echo: false
+```
+
+My project leverages the work provided by HeTianning's [Toronto-Island-Ferry-Ticket](https://github.com/HeTianning/Toronto-Island-Ferry-Ticket) project found in GitHub.
+
+HeTianning's project demonstrates the use of time series forecasting techniques to predict the demand for ferry tickets in Toronto. The use of [SARIMA](https://apxml.com/courses/time-series-analysis-forecasting/chapter-5-seasonal-arima-sarima) (Seasonal adjusted Auto-Regressive Integrated Moving Average) and the [PROPHET](https://github.com/facebook/prophet) (time series forecasting model provided by Meta) models to forecast ticket sales based on historical ticket sales data will be used.
+
+The analysis includes data pre-processing, exploratory data analysis, model fitting, and forecasting for a 30 day period. The results will help in understanding the patterns in ferry ticket sales and assist in making informed decisions for resource allocation and planning.
+
+# Project Structure
+
+| toronto ferry ticket demand/
+|     data/
+|         raw_data/
+|             toronto-island-ferry-ticket-counts.csv
+|         simulated_data/
+|         analysis_data/
+|         processed/
+| 
+|     models/
+|          sarima_model.pkl
+|          prophet_model.pkl
+
+|     notebooks/
+
+|     output/
+|         plots/
+|         results/
+| 
+
+# Initial Steps:
+
+1.  (Package) Setup
+    -   Connect the required library packages including the Toronto Ferry data
+
+```{r}
+library(tidyverse)
+library(conflicted)
+library(ggplot2)
+library(readr)
+
+# Site where Toronto Island ferry ticket info can be found
+ticket_counts_csv_site <- "https://ckan0.cf.opendata.inter.prod-toronto.ca/en/dataset/toronto-island-ferry-ticket-counts/resource/6c8e7ce0-1961-4c11-ba89-9db5deda88c0"
+
+# Where CSV file within ticket_counts_csv_site can be found
+ticket_counts_csv_url <- paste(ticket_counts_csv_site, "download/toronto-island-ferry-ticket-counts.csv", sep="/")
+
+```
+
+## Load the Toronto Island Ferry data
+
+```{r}
+
+# Where to store the downloaded CSV file relative to the project home directory
+destination_csv <- "data/raw_data/toronto-island-ferry-ticket-counts.csv"
+
+download.file(ticket_counts_csv_url, destination_csv)
+
+toronto_ferry_data <- read_csv(destination_csv)
+
+# Create a Date column out of the downloaded Timestamp column
+toronto_ferry_data$timestamp <- as.Date(toronto_ferry_data$Timestamp)
+
+# Group timestamp records by date and sum the redemption counts into a Frequency count
+toronto_ferry_data_summarized <- toronto_ferry_data |> group_by(timestamp) |> summarise(Freq = sum(`Redemption Count`))
+
+# Create data frame for data
+toronto_ferry_data_df <- data.frame(Date = toronto_ferry_data_summarized$timestamp, 
+                                    Counts  = toronto_ferry_data_summarized$Freq)
+
+highlight_periods <- data.frame(
+  xmin = as.Date(c('2020-03-11')),   # WHO declared COVID pandemic start
+  xmax = as.Date(c('2022-05-05')),   # WHO declared COVID pandemic ended
+  ymin = 0,
+  ymax = Inf,
+  fill = "COVID")
+
+toronto_ferry_data_df |> ggplot(aes(x = Date, y = Counts)) +
+  geom_rect(data = highlight_periods, aes(xmin = xmin, xmax = xmax,
+                                          ymin = ymin, ymax = ymax,
+                                          fill = fill),
+                                          alpha = 0.2, inherit.aes = FALSE) +
+  geom_line() +           # Add timeseries line
+  xlab("Timestamp") + ylab("Redemption Counts") +
+  ggtitle("Daily Ticket Redemption Counts for Toronto Island Ferry") +
+  scale_fill_manual("", values = "lightgreen") +
+  theme_classic()
+
+```

@@ -47,18 +47,21 @@ library(tidyverse)
 library(conflicted)
 library(ggplot2)
 library(readr)
+```
+
+## Load the Toronto Island Ferry data
+
+The variable "ticket_counts_csv_site" identifies the website where the ticket info can be downloaded. From this the actual web site directory where the CSV file can be loaded from is defined as the concatenation of ticket_counts_csv_site and "download/toronto- island-ferry-ticket-counts.csv" and stored in "ticket_counts_csv_url".
+
+The destination directory where R is told to download the CSV file is defined in "destination_csv", which is relative to the project directory
+
+```{r}
 
 # Site where Toronto Island ferry ticket info can be found
 ticket_counts_csv_site <- "https://ckan0.cf.opendata.inter.prod-toronto.ca/en/dataset/toronto-island-ferry-ticket-counts/resource/6c8e7ce0-1961-4c11-ba89-9db5deda88c0"
 
 # Where CSV file within ticket_counts_csv_site can be found
 ticket_counts_csv_url <- paste(ticket_counts_csv_site, "download/toronto-island-ferry-ticket-counts.csv", sep="/")
-
-```
-
-## Load the Toronto Island Ferry data
-
-```{r}
 
 # Where to store the downloaded CSV file relative to the project home directory
 destination_csv <- "data/raw_data/toronto-island-ferry-ticket-counts.csv"
@@ -77,6 +80,15 @@ toronto_ferry_data_summarized <- toronto_ferry_data |> group_by(timestamp) |> su
 toronto_ferry_data_df <- data.frame(Date = toronto_ferry_data_summarized$timestamp, 
                                     Counts  = toronto_ferry_data_summarized$Freq)
 
+  
+
+```
+
+## Plot the Raw Data
+
+We now plot the raw redemption count data from 2015 to 2025 using ggplot2. This visualization should reveal seasonal patterns in Toronto Island ferry usage and show whether unexpected events—such as the COVID-19 pandemic—impacted ridership. The World Health Organization designated the COVID-19 pandemic period as March 11, 2020 to May 5, 2023.
+
+```{r}
 highlight_periods <- data.frame(
   xmin = as.Date(c('2020-03-11')),   # WHO declared COVID pandemic start
   xmax = as.Date(c('2022-05-05')),   # WHO declared COVID pandemic ended
@@ -92,7 +104,95 @@ toronto_ferry_data_df |> ggplot(aes(x = Date, y = Counts)) +
   geom_line() +           # Add timeseries line
   xlab("Timestamp") + ylab("Redemption Counts") +
   ggtitle("Daily Ticket Redemption Counts for Toronto Island Ferry") +
-  scale_fill_manual("", values = "lightgreen") +
-  theme_classic()
+  scale_fill_manual("", values = "lightgreen")
+```
 
+## Initial Observations On Redemption Data
+
+Several clear patterns emerge from the time series plot of ticket redemption data. First, the data exhibits both annual and weekly seasonality: redemption counts peak during summer months and decline in winter, while weekends consistently show higher activity than weekdays. Additionally, summer periods show notable spikes in redemption counts. Finally, ticket redemption volumes appear to have been impacted during the COVID-19 pandemic period.
+
+## Basic Statistics and Insights
+
+The next step is to explore the summary statistics of the redemption data.
+
+```{r}
+summary(toronto_ferry_data_df$Counts)
+```
+
+The mean ticket redemption count is around `3270` while the median is around 1,120. This substantial difference—with the mean nearly three times the median—indicates a right-skewed distribution driven by high-value outliers that pull the mean upward.
+
+```{r}
+cat("Redemption count variation standard deviation is: ",
+      sd(toronto_ferry_data_df$Counts))
+```
+
+## Variance Stabilizing and Trend Removal of Counts Data
+
+The standard deviation greater than 4,460 indicates substantial day-to-day variability in ticket redemption. We apply a log transformation to stabilize this variance, as redemption counts typically show larger absolute variation on high-volume days. The log transformation compresses large values more than small ones, making the variance more consistent across different redemption levels.
+
+```{r}
+toronto_ferry_data_df$Counts_log <- log10(toronto_ferry_data_df$Counts)
+```
+
+Now plot the log transformed counts data.
+
+```{r}
+toronto_ferry_data_df |> ggplot(aes(x = Date, y = Counts_log)) +
+  geom_rect(data = highlight_periods, aes(xmin = xmin, xmax = xmax,
+                                          ymin = ymin, ymax = ymax,
+                                          fill = fill),
+                                          alpha = 0.2, inherit.aes = FALSE) +
+  geom_line() +           # Add timeseries line
+  xlab("Timestamp") + ylab("Redemption Counts") +
+  ggtitle("Log-transformed ticket redemptions for Toronto Island Ferry") +
+  scale_fill_manual("", values = "lightgreen")
+```
+
+Note that affects of the pandemic on ticket redemption demand has less of an impact on the log transformed data than the original redemption count data.
+
+We can visualize the frequency of daily redemption counts using the log transformed data to see the distribution of daily counts.
+
+```{r}
+# Convert possible -inf and inf values in Counts_log to NA
+toronto_ferry_data_df$Counts_log[is.infinite(toronto_ferry_data_df$Counts_log)] <- NA
+
+# Now remove the NA rows in Counts_log
+toronto_ferry_data_df <- toronto_ferry_data_df[complete.cases(toronto_ferry_data_df), ]
+
+toronto_ferry_data_df |> ggplot(aes(Counts_log)) +
+  geom_histogram(bins = 40,
+                 color = "black", 
+                 fill = "grey80") +
+  geom_vline(aes(xintercept=mean(Counts_log)),
+            color="blue", linetype="dashed", size=0.5) +
+  annotate("text", 
+           x=mean(toronto_ferry_data_df$Counts_log),
+           y=400, label="Mean", angle=90)
+```
+
+To help visualize the distribution of ticket redemption counts, we can use a density plot. A density plot is a smoothed representation of the distribution of the data, showing where values are more or less concentrated. In our case, we plot the density of the log-transformed redemption counts.
+
+```{r}
+toronto_ferry_data_df |>
+  dplyr::filter(is.finite(Counts_log)) |>  # Remove non-finite values upfront from log data
+  ggplot(aes(Counts_log)) +
+  geom_histogram(aes(y = after_stat(density)),
+                 bins = 40,
+                 color = "#000000", 
+                 fill = "#0099F8") +
+  geom_density(color = "#000000",
+               fill = "#F85700", alpha = 0.6) +
+  xlab("Log Redemption Count") + ylab("Density") +
+  ggtitle("Distribution of Log-Transformed Redemptions Count",
+          subtitle = "for Toronto Island Ferry")
+```
+
+To remove possible trend and seasonal effects from the Counts_log data, we use the built-in diff() function in R. First-difference a time series will remove a linear trend.
+
+```{r}
+toronto_ferry_data_diff<- diff(as.ts(toronto_ferry_data_df$Counts_log),
+                               lag=1, differences = 2)
+#toronto_ferry_data_diff_df <- 
+#  data.frame(toronto_ferry_data_df$Date[3:length(c())+2])
+#toronto_ferry_data_diff_df$Counts_log_diff <- toronto_ferry_data_diff
 ```

@@ -119,7 +119,7 @@ The next step is to explore the summary statistics of the redemption data.
 summary(toronto_ferry_data_df$Counts)
 ```
 
-The mean ticket redemption count is around `3270` while the median is around 1,120. This substantial difference—with the mean nearly three times the median—indicates a right-skewed distribution driven by high-value outliers that pull the mean upward.
+The mean ticket redemption count is greater than 3200 while the median is less than 1200. This substantial difference—with the mean nearly three times the median—indicates a right-skewed distribution driven by high-value outliers that pull the mean upward.
 
 ```{r}
 cat("Redemption count variation standard deviation is: ",
@@ -128,10 +128,15 @@ cat("Redemption count variation standard deviation is: ",
 
 ## Variance Stabilizing and Trend Removal of Counts Data
 
-The standard deviation greater than 4,460 indicates substantial day-to-day variability in ticket redemption. We apply a log transformation to stabilize this variance, as redemption counts typically show larger absolute variation on high-volume days. The log transformation compresses large values more than small ones, making the variance more consistent across different redemption levels.
+The standard deviation greater than 4,400 indicates substantial day-to-day variability in ticket redemption. We apply a log transformation to stabilize this variance, as redemption counts typically show larger absolute variation on high-volume days. The log transformation compresses large values more than small ones, making the variance more consistent across different redemption levels.
 
 ```{r}
 toronto_ferry_data_df$Counts_log <- log10(toronto_ferry_data_df$Counts)
+
+# In the case where a few of the Counts_log became -Inf, replace the
+# values with 0.
+# 
+toronto_ferry_data_df$Counts_log[is.infinite(toronto_ferry_data_df$Counts_log)] <- 0
 ```
 
 Now plot the log transformed counts data.
@@ -153,18 +158,12 @@ Note that affects of the pandemic on ticket redemption demand has less of an imp
 We can visualize the frequency of daily redemption counts using the log transformed data to see the distribution of daily counts.
 
 ```{r}
-# Convert possible -inf and inf values in Counts_log to NA
-toronto_ferry_data_df$Counts_log[is.infinite(toronto_ferry_data_df$Counts_log)] <- NA
-
-# Now remove the NA rows in Counts_log
-toronto_ferry_data_df <- toronto_ferry_data_df[complete.cases(toronto_ferry_data_df), ]
-
 toronto_ferry_data_df |> ggplot(aes(Counts_log)) +
   geom_histogram(bins = 40,
                  color = "black", 
                  fill = "grey80") +
   geom_vline(aes(xintercept=mean(Counts_log)),
-            color="blue", linetype="dashed", size=0.5) +
+            color="blue", linetype="dashed", linewidth=0.5) +
   annotate("text", 
            x=mean(toronto_ferry_data_df$Counts_log),
            y=400, label="Mean", angle=90)
@@ -174,7 +173,6 @@ To help visualize the distribution of ticket redemption counts, we can use a den
 
 ```{r}
 toronto_ferry_data_df |>
-  dplyr::filter(is.finite(Counts_log)) |>  # Remove non-finite values upfront from log data
   ggplot(aes(Counts_log)) +
   geom_histogram(aes(y = after_stat(density)),
                  bins = 40,
@@ -190,9 +188,25 @@ toronto_ferry_data_df |>
 To remove possible trend and seasonal effects from the Counts_log data, we use the built-in diff() function in R. First-difference a time series will remove a linear trend.
 
 ```{r}
-toronto_ferry_data_diff<- diff(as.ts(toronto_ferry_data_df$Counts_log),
+toronto_ferry_data_diff_df <- data.frame(toronto_ferry_data_df$Date[3:nrow(toronto_ferry_data_df)])
+
+toronto_ferry_data_diff_df$Counts_diff <- 
+  diff(as.ts(toronto_ferry_data_df$Counts_log),
                                lag=1, differences = 2)
-#toronto_ferry_data_diff_df <- 
-#  data.frame(toronto_ferry_data_df$Date[3:length(c())+2])
-#toronto_ferry_data_diff_df$Counts_log_diff <- toronto_ferry_data_diff
+
+# Rename the Counts Difference column
+names(toronto_ferry_data_diff_df) <- c("Date", "Counts_Difference")
+
+```
+
+Now let's plot the first differencing of the log-transformed data
+
+```{r}
+toronto_ferry_data_diff_df |> ggplot(aes(x = Date, 
+                                         y = as.numeric(Counts_Difference))) +
+  geom_line() +           # Add timeseries line
+  xlab("Date") + ylab("Diff Log Ticket Redemption Counts") +
+  ggtitle("First Differencing Log-transformed ticket redemptions",
+          subtitle = "for Toronto Island Ferry") +
+  scale_fill_manual("", values = "lightgreen")
 ```

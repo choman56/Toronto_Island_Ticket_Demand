@@ -10,11 +10,15 @@ editor: visual
 #| echo: false
 ```
 
+# Foreword
+
 My project leverages the work provided by HeTianning's [Toronto-Island-Ferry-Ticket](https://github.com/HeTianning/Toronto-Island-Ferry-Ticket) project found in GitHub.
 
 HeTianning's project demonstrates the use of time series forecasting techniques to predict the demand for ferry tickets in Toronto. The use of [SARIMA](https://apxml.com/courses/time-series-analysis-forecasting/chapter-5-seasonal-arima-sarima) (Seasonal adjusted Auto-Regressive Integrated Moving Average) and the [PROPHET](https://github.com/facebook/prophet) (time series forecasting model provided by Meta) models to forecast ticket sales based on historical ticket sales data will be used.
 
 The analysis includes data pre-processing, exploratory data analysis, model fitting, and forecasting for a 30 day period. The results will help in understanding the patterns in ferry ticket sales and assist in making informed decisions for resource allocation and planning.
+
+I adapted the analytical framework from HeTianning's white paper (available in his public GitHub repository) to guide my data collection and processing workflow. All implementation code was independently developed, using his methodology as a conceptual foundation rather than replicating his technical approach. Claude Sonnet 4.5 assisted with refining the language in this report and optimizing certain code segments for improved performance.
 
 # Project Structure
 
@@ -37,7 +41,9 @@ The analysis includes data pre-processing, exploratory data analysis, model fitt
 |         results/
 | 
 
-# Initial Steps:
+# Processing Procedures
+
+## Initial Steps:
 
 1.  (Package) Setup
     -   Connect the required library packages including the Toronto Ferry data
@@ -68,7 +74,8 @@ destination_csv <- "data/raw_data/toronto-island-ferry-ticket-counts.csv"
 
 download.file(ticket_counts_csv_url, destination_csv)
 
-toronto_ferry_data <- read_csv(destination_csv)
+toronto_ferry_data <- read_csv(destination_csv,
+                               show_col_types = FALSE)
 
 # Create a Date column out of the downloaded Timestamp column
 toronto_ferry_data$timestamp <- as.Date(toronto_ferry_data$Timestamp)
@@ -87,6 +94,8 @@ toronto_ferry_data_df <- data.frame(Date = toronto_ferry_data_summarized$timesta
 ## Plot the Raw Data
 
 We now plot the raw redemption count data from 2015 to 2025 using ggplot2. This visualization should reveal seasonal patterns in Toronto Island ferry usage and show whether unexpected events—such as the COVID-19 pandemic—impacted ridership. The World Health Organization designated the COVID-19 pandemic period as March 11, 2020 to May 5, 2023.
+
+We see from the plot below that the raw redemption counts are highly seasonal, following a cyclical pattern. The demand for ferry rides to the Toronto Islands is much greater in the warmer seasons than in the colder seasons. The jagged line plot also reveals substantial variability in ticket demand from day to day.
 
 ```{r}
 highlight_periods <- data.frame(
@@ -128,7 +137,7 @@ cat("Redemption count variation standard deviation is: ",
 
 ## Variance Stabilizing and Trend Removal of Counts Data
 
-The standard deviation greater than 4,400 indicates substantial day-to-day variability in ticket redemption. We apply a log transformation to stabilize this variance, as redemption counts typically show larger absolute variation on high-volume days. The log transformation compresses large values more than small ones, making the variance more consistent across different redemption levels.
+The standard deviation greater than 4,400 confirms our belief of substantial day-to-day variability in ticket redemption. We apply a log transformation to stabilize this variance, as redemption counts typically show larger absolute variation on high-volume days. The log transformation compresses large values more than small ones, making the variance more consistent across different redemption levels.
 
 ```{r}
 toronto_ferry_data_df$Counts_log <- log10(toronto_ferry_data_df$Counts)
@@ -163,10 +172,13 @@ toronto_ferry_data_df |> ggplot(aes(Counts_log)) +
                  color = "black", 
                  fill = "grey80") +
   geom_vline(aes(xintercept=mean(Counts_log)),
-            color="blue", linetype="dashed", linewidth=0.5) +
+            color="blue", linetype="dashed", linewidth=0.25) +
   annotate("text", 
            x=mean(toronto_ferry_data_df$Counts_log),
-           y=400, label="Mean", angle=90)
+           color = "navy",
+           y=350, size = 2, label="Mean Log(Redemptions)", angle=90) +
+  ggtitle("Daily Frequency of Log Transformed Redemption Counts") +
+  xlab("Log(Daily Sum of Redemption Counts)") + ylab("Number of Occurances")
 ```
 
 To help visualize the distribution of ticket redemption counts, we can use a density plot. A density plot is a smoothed representation of the distribution of the data, showing where values are more or less concentrated. In our case, we plot the density of the log-transformed redemption counts.
@@ -177,15 +189,15 @@ toronto_ferry_data_df |>
   geom_histogram(aes(y = after_stat(density)),
                  bins = 40,
                  color = "#000000", 
-                 fill = "#0099F8") +
+                 fill = "blue") +
   geom_density(color = "#000000",
-               fill = "#F85700", alpha = 0.6) +
+               fill = "salmon", alpha = 0.4) +
   xlab("Log Redemption Count") + ylab("Density") +
   ggtitle("Distribution of Log-Transformed Redemptions Count",
           subtitle = "for Toronto Island Ferry")
 ```
 
-To remove possible trend and seasonal effects from the Counts_log data, we use the built-in diff() function in R. First-difference a time series will remove a linear trend.
+To remove possible trend and seasonal effects from the Counts_log data, we use the built-in diff() function in R to perform a first-difference. First-differencing stabilizes variance when the variance grows with the level of the data series itself. First-differencing helps remove trends and achieving stationarity, not about proportional variance-to-mean relationships (that's what logs handle).
 
 ```{r}
 toronto_ferry_data_diff_df <- data.frame(toronto_ferry_data_df$Date[3:nrow(toronto_ferry_data_df)])
@@ -210,3 +222,108 @@ toronto_ferry_data_diff_df |> ggplot(aes(x = Date,
           subtitle = "for Toronto Island Ferry") +
   scale_fill_manual("", values = "lightgreen")
 ```
+
+To summarize, one-step differencing of log transformed time series data accomplishes the following:
+
+-   Log transformation stabilizes the variance and reduces the impact of spikes on time-series data
+
+-   One-step differencing represents the relative changes or growth rate in the redemption counts from consecutive days
+
+-   One-step differencing removes the trend, making the time-series data stationary
+
+    -   The average (mean) stays roughly constant
+
+    -   The variability stays roughly constant
+
+    -   No systematic upward or downward drift
+
+-   It centers the data around zero with occasional spikes and dips
+
+-   Most statistical models (like ARIMA) assume stationary data. Differencing is a simple way to remove trends and make the data suitable for modeling.
+
+## ACF and PACF Plots
+
+Auto Correlation Function (ACF) shows how correlated a time series is with lagged versions of itself. It measures the total correlation between observations separated by k lags, including both direct and indirect effects
+
+A Partial AutoCorrelation Function plot (PACF) shows the correlation between a time series and its lags after removing the influence of intermediate lags. It measures the direct relationship between an observation and a lagged version of itself, while controlling for (removing) the influence of all the observations in between.
+
+The key difference between ACF and PACF plots:
+
+-   ACF plots at lag 3: Includes both direct correlation AND indirect correlation that flows through lags 1 and 2
+
+-   PACF plots at lag 3: Shows ONLY the direct correlation with lag 3, filtering out what's already explained by lags 1 and 2
+
+```{r}
+# Compute the ACF of the first differenced log transformed data
+# we can use the stats::acf() function
+require(graphics)
+acf_result <- acf(toronto_ferry_data_diff_df$Counts_Difference,
+                  lag.max = 30, plot=FALSE)
+acf_df <- data.frame(lag = acf_result$lag, acf = acf_result$acf)
+
+confidence_interval <- qnorm((1 + 0.95)/2) / sqrt(length(toronto_ferry_data_diff_df$Counts_Difference))
+
+acf_df |> ggplot(aes(x = lag, y = acf)) +
+  geom_ribbon(aes(ymin = -confidence_interval, ymax = confidence_interval), 
+              fill = "lightblue", alpha = 0.5) +
+  geom_hline(yintercept = 0) +
+  geom_segment(aes(xend = lag, yend = 0), linewidth = 1, color = "steelblue") +
+  geom_point(size = 1, color = "steelblue") +
+    labs(title = "Auto-correlation of 1-step differencing of log-transformed Departure Data",
+         x = "Lag", y = "Autocorrelation") +
+  theme_minimal()
+```
+
+Below is the PACF plot for the log transformed 1-step differenced ferry departure data.
+
+```{r}
+pacf_result <- pacf(toronto_ferry_data_diff_df$Counts_Difference,
+                    type = "correlation",
+                    lag.max = 30, plot=FALSE)
+
+pacf_df <- data.frame(lag = pacf_result$lag, pacf = pacf_result$acf)
+
+confidence_interval <- qnorm((1 + 0.95)/2) / sqrt(length(toronto_ferry_data_diff_df$Counts_Difference))
+
+pacf_df |> ggplot(aes(x = lag, y = pacf)) +
+  geom_ribbon(aes(ymin = -confidence_interval, ymax = confidence_interval), 
+              fill = "lightblue", alpha = 0.5) +
+  geom_hline(yintercept = 0) +
+  geom_segment(aes(xend = lag, yend = 0), linewidth = 1, color = "steelblue") +
+  geom_point(size = 1, color = "steelblue") +
+    labs(title = "Partial Auto-correlation of 1-step differencing", subtitle = "of log-transformed Departure Data",
+         x = "Lag", y = "Autocorrelation") +
+  theme_minimal()
+```
+
+The PACF plot suggests significant auto-correlation at lags 1 through 7, after which the auto-correlation of the remaining lags is significantly diminished.
+
+We note that the first lag of the PACF plot shows a negative partial autocorrelation of -0.541 in the log-differenced series. This suggests a mean reversion pattern in the data. In simpler terms, if today's change in ticket redemptions is positive (an increase from yesterday), tomorrow's change tends to be negative (a decrease). Conversely, if today sees a drop in redemptions, tomorrow is likely to see an increase. This creates an oscillating pattern where high redemption days tend to be followed by lower redemption days, and vice versa.
+
+## Testing to Determine if Data is Stationary
+
+We now look to determine if the redemption time series data is stationary or if there is a underlying trend and has constant variance over time.
+
+Zach Bobbitt published on the Statology website the following information on the use of [Augmented Dickey-Fuller Test in R (With Example)](https://www.statology.org/dickey-fuller-test-in-r/):
+
+> *A time series is said to be “stationary” if it has no trend, exhibits constant variance over time, and has a constant autocorrelation structure over time.*
+>
+> *One way to test whether a time series is stationary is to perform an **augmented Dickey-Fuller test**, which uses the following null and alternative hypotheses:*
+>
+> -   ***H~0~:** The time series is non-stationary. In other words, it has some time-dependent structure and does not have constant variance over time.*
+>
+> -   ***H~A~:** The time series is stationary.*
+>
+> If the [p-value](https://www.statology.org/p-values-statistical-significance/) from the test is less than some significance level (e.g. α = .05), then we can reject the null hypothesis and conclude that the time series is stationary.
+
+```{r}
+library(tseries)
+adf_result.countsDiff <- tseries::adf.test(toronto_ferry_data_diff_df$Counts_Difference)
+adf_result.countsDiff
+```
+
+Given that the Augmented Dickey-Fuller test returned a p-value of significantly less than 0.05, we will [**reject**]{.underline} the null hypothesis that the one differenced log redemption data is not stationary and conclude that the data is stationary having constant variance over time. The one step differencing of the log transformed redemption counts made the original time series data stationary.
+
+# Forecasting Future Counts
+
+## Using SARIMA to Forecast Ticket Redemption Counts

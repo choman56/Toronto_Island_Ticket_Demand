@@ -211,7 +211,7 @@ names(toronto_ferry_data_diff_df) <- c("Date", "Counts_Difference")
 
 ```
 
-Now let's plot the first differencing of the log-transformed data
+Now let's plot the first differencing of the log-transformed data to mitigate the inherent seasonality of ferry ridership.
 
 ```{r}
 toronto_ferry_data_diff_df |> ggplot(aes(x = Date, 
@@ -283,6 +283,8 @@ pacf_result <- pacf(toronto_ferry_data_diff_df$Counts_Difference,
 
 pacf_df <- data.frame(lag = pacf_result$lag, pacf = pacf_result$acf)
 
+# 95% confidence interval 
+
 confidence_interval <- qnorm((1 + 0.95)/2) / sqrt(length(toronto_ferry_data_diff_df$Counts_Difference))
 
 pacf_df |> ggplot(aes(x = lag, y = pacf)) +
@@ -327,3 +329,189 @@ Given that the Augmented Dickey-Fuller test returned a p-value of significantly 
 # Forecasting Future Counts
 
 ## Using SARIMA to Forecast Ticket Redemption Counts
+
+Now that we have stationary time series data to model, we can now use the seasonally autoregressive integrated moving average (SARIMA) model to help us predict future ticket redemption volumes based historical redemption counts obtained from the website.
+
+The SARIMA model can handle seasonality influences, while it models both seasonal and non-seasonal trends. This model is widely used in a number of fields including economics and finance.
+
+To access the SARIMA modelling package for R, I need to require the "forecast" library, which I obtain from CRAN repository.
+
+```{r}
+require(forecast)
+sarima_model <- auto.arima(toronto_ferry_data_df$Counts_log,
+                           D = 1,
+                           max.P = 2, max.Q = 2,
+                           seasonal = TRUE,
+                           stepwise = FALSE,
+                           approximation=FALSE)
+
+summary(sarima_model)
+```
+
+```{r}
+plot(sarima_model$residuals)
+acf(sarima_model$residuals)
+Box.test(sarima_model$residuals,
+         lag = log(length(sarima_model$residuals)),
+         type = "Ljung-Box")
+```
+
+Now that we have built a model, let's try predicting the next 12 months using this model.
+
+scale_color_manual
+
+```{r}
+forecasts <- forecast(sarima_model, h = 365)  # Forecast 1 year ahead
+
+autoplot(forecasts) +
+  ggtitle("Forecast of Toronto Ferry Ticket Redemptions for next year") +
+     xlab("Year") +
+     ylab("Number of Redemptions")
+
+```
+
+## Using Phophet Modeling to Forecast Ticket Redemptions
+
+Phophet is an open source modeling software from Meta Corporation, that is used to model time series data to help with forecasting future trends. It is based upon a de-composable additive model where data with non-linear trends fit with seasonality trends. This information was summarized from the web article [Time Series Analysis using Facebook Prophet](https://www.geeksforgeeks.org/data-science/time-series-analysis-using-facebook-prophet/)
+
+The steps to using Prophet are the following:
+
+1.  Install and reference the Prophet library (if not already installed) from CRAN
+
+2.  Create a suitable data.frame (the Prophet modeling software requires the data to be passed to it within a specific data.frame structure. The data-frame structure is
+
+    -   column named "ds" which is are the dates of each time series data item in "Date" format
+    -   column named "y" which is numeric time series data
+
+3.  Generate the model using the prophet function within the Prophet library
+
+4.  Create future dataframe using the "make_future_dataframe()" function for the period desired
+
+5.  Generate the future forecasted predictions using the generated model created by the prophet function, supplying the future dataframe
+
+6.  Visualize the forecast
+
+```{r}
+# Step 1: Install and load Prophet
+require(Rcpp)
+require(rlang)
+require(prophet)
+
+# Step 2: Prepare your data for Prophet
+# Prophet requires a dataframe with columns 'ds' (date) and 'y' (value)
+toronto_ferry_data_prophet_df <- data.frame(ds = toronto_ferry_data_df$Date,
+                                            y = as.numeric(toronto_ferry_data_df$Counts))
+
+# Step 3: Fit the Prophet model
+toronto_ferry_prophet_model <- prophet(toronto_ferry_data_prophet_df,
+                                       seasonality.mode = 'additive',  # or 'multiplicative'
+                                       yearly.seasonality = TRUE,
+                                       weekly.seasonality = TRUE,
+                                       daily.seasonality = FALSE)  # usually not needed
+
+# Step 4: Create future dataframe for 1 year (365 days)
+toronto_future_prophet <- make_future_dataframe(toronto_ferry_prophet_model,
+                                                periods = 365)
+
+# Step 5: Generate the predictions
+toronto_forecast <- predict(toronto_ferry_prophet_model,
+                            toronto_future_prophet)
+
+# Step 6: # Visualize the forecast
+ggplot(toronto_forecast, aes(x = ds)) +
+  geom_ribbon(aes(ymin = yhat_lower, ymax = yhat_upper,
+                  fill = "80% Interval"), alpha = 0.3) +
+  geom_line(aes(y = yhat, color = "Forecast"), linewidth = 1) +
+  geom_point(data = toronto_ferry_data_prophet_df,
+             aes(y = y, color = "Actual"), size = 0.5) +
+  scale_color_manual(values = c("Actual" = "black", "Forecast" = "blue")) +
+  scale_fill_manual(values = c("80% Interval" = "lightblue")) +
+  labs(title = "One Year Toronto Island Ferry Ridership Forecast",
+       x = "Year", 
+       y = "Redemption Count",
+       color = NULL,
+       fill = NULL) +
+  theme_minimal()
+
+```
+
+## Cross Validating Phophet Modeling
+
+Cross validation has several benefits when modeling time series data:
+
+-   Improved performance estimates
+-   Improved use of limited data
+-   Model overfitting detection
+-   Tests forecast horizon performance
+
+```{r}
+# Cross-validation with rolling windows
+# initial: minimum training period (e.g., 730 days = 2 years)
+# period: spacing between cutoff dates (e.g., 90 days)
+# horizon: forecast horizon to evaluate (e.g., 365 days)
+toronto_df_cv <- prophet::cross_validation(toronto_ferry_prophet_model,
+                                  initial = 730,  # Use first 2 years for initial training
+                                  period = 90,    # Move forward 90 days each time
+                                  horizon = 365,  # Forecast 1 year ahead
+                                  units = 'days')
+
+# Calculate performance metrics
+df_p <- prophet::performance_metrics(toronto_df_cv)
+print(df_p)
+```
+
+Plot the cross validation performance metrics, focusing on performance variables that can handle 0's in the Y data. This excludes mape which when encountering 0 causes a divide by zero (Inf) data ourcome, which the builtin plotting function plot_cross_validation_metric() doesn't handle well.
+
+```{r}
+# prophet::plot_cross_validation_metric() has a plotting bug using ggplot2 version 4.0.0
+# prophet::plot_cross_validation_metric(toronto_df_cv, metric = 'coverage')
+
+# So let's manually plot the cross-validation model performance coverage
+require(gridExtra)
+
+plot_cv_coverage <- ggplot(df_p, aes(x = horizon, y = coverage)) +
+  geom_line(color = "blue", linewidth = 1) +
+  geom_hline(yintercept = 0.8, linetype = "dashed", color = "red") +
+  ylim(0.5, 1) +
+  labs(title = "Coverage Over Forecast Horizon",
+       x = "Horizon (days)",
+       y = "Coverage",
+       subtitle = "Red line = ideal 0.8 coverage") +
+  theme_minimal()
+
+plot_cv_rmse <- ggplot(df_p, aes(x = horizon, y = rmse)) +
+  geom_line(color = "blue", linewidth = 1) +
+  labs(title = "RMSE Over Forecast Horizon",
+       x = "Horizon (days)",
+       y = "RMSE") +
+  theme_minimal()
+
+plot_cv_mae <- ggplot(df_p, aes(x = horizon, y = mae)) +
+  geom_line(color = "blue", linewidth = 1) +
+  labs(title = "MAE Over Forecast Horizon",
+       x = "Horizon (days)",
+       y = "MAE") +
+  theme_minimal()
+
+grid.arrange(plot_cv_coverage, plot_cv_rmse, plot_cv_mae, nrow = 2, ncol = 2)
+```
+
+### Cross Validation Coverage Plot
+
+The coverage plot reveals how well the model's prediction intervals capture actual values across different forecast horizons:
+
+-   **Short-term (37-100 days):** Coverage remains near 80%, very close to the ideal target. This indicates the model's uncertainty estimates are well-calibrated for near-term forecasts, with approximately 80% of actual values falling within the 80% prediction intervals.
+
+-   **Mid-term (150-200 days):** Coverage drops to 68-72%, suggesting the prediction intervals are slightly too narrow. More than 20% of actual values fall outside the predicted ranges, indicating the model underestimates uncertainty at this horizon.
+
+-   **Long-term (250-365 days):** Coverage stabilizes around 70-73%. While below the ideal 80% target, this remains reasonable for year-ahead daily forecasts, though it indicates continued slight underestimation of forecast uncertainty.Cross Validation RMSE Plot
+
+### Cross Validation RMSE Plot
+
+The RMSE plot shows forecast error increases with forecast horizon. Short-term forecasts (37-100 days) have an RMSE around 3,300 passengers, while long-term forecasts (300+ days) have an RMSE of 4,300-4,500 passengers.
+
+This increase is expected: uncertainty compounds as the model forecasts further into the future. Each additional day adds more potential error, causing RMSE to rise steadily before leveling off around day 300.
+
+### Cross Validation MAE Plot
+
+The MAE (Mean Absolute Error) measures the average magnitude of forecast errors. The model's MAE remains relatively stable at 2,300-2,400 passengers across all forecast horizons, meaning forecasts are typically off by about 2,300-2,400 passengers per day, regardless of whether the model over-predicts or under-predicts.

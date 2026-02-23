@@ -1,13 +1,22 @@
 ---
 title: "Toronto Ferry Ticket Demand Forecasting"
+author: "Clarke A. Homan"
 format: html
 editor: visual
+params:
+  github: choman56
+  author: "Clarke A. Homan"
+  email: "cahoman@gmail.com"
 ---
 
 ```{r}
 # The `echo: false` option disables the printing of code (only output 
 # is displayed).
 #| echo: false
+```
+
+```         
+date: "`r format(Sys.time(), '%d %B, %Y')`"
 ```
 
 # Foreword
@@ -19,6 +28,18 @@ HeTianning's project demonstrates the use of time series forecasting techniques 
 The analysis includes data pre-processing, exploratory data analysis, model fitting, and forecasting for a 30 day period. The results will help in understanding the patterns in ferry ticket sales and assist in making informed decisions for resource allocation and planning.
 
 I adapted the analytical framework from HeTianning's white paper (available in his public GitHub repository) to guide my data collection and processing workflow. All implementation code was independently developed, using his methodology as a conceptual foundation rather than replicating his technical approach. Claude Sonnet 4.5 assisted with refining the language in this report and optimizing certain code segments for improved performance.
+
+# Project Goals
+
+These are the goals of my pursuing this project:
+
+-   Using R and RStudio, replicate the findings of HeTianning's white paper analyzing the use of SARIMA and Prophet time series models to forecast 365 days into the future based upon historical ferry ridership data obtained from the Toronto ferry site.
+
+-   Compare the effectiveness of using SARIMA versus Prophet in developing models of the ridership time series data.
+
+-   Practice data manipulation and plotting capabilities of R and it's libraries
+
+-   Explore the use of Claude Sonnet in supporting my development of the R code. Although I interacted with Claude as support in reviewing my code and in some cases, correcting and improving it, I did not just ask Claude to write the code for me. I steered the ship.
 
 # Project Structure
 
@@ -111,6 +132,8 @@ toronto_ferry_data_df |> ggplot(aes(x = Date, y = Counts)) +
                                           fill = fill),
                                           alpha = 0.2, inherit.aes = FALSE) +
   geom_line() +           # Add timeseries line
+  geom_hline(yintercept = mean(toronto_ferry_data_df$Counts),
+             linetype = "dashed", color = "red") +
   xlab("Timestamp") + ylab("Redemption Counts") +
   ggtitle("Daily Ticket Redemption Counts for Toronto Island Ferry") +
   scale_fill_manual("", values = "lightgreen")
@@ -140,7 +163,7 @@ cat("Redemption count variation standard deviation is: ",
 The standard deviation greater than 4,400 confirms our belief of substantial day-to-day variability in ticket redemption. We apply a log transformation to stabilize this variance, as redemption counts typically show larger absolute variation on high-volume days. The log transformation compresses large values more than small ones, making the variance more consistent across different redemption levels.
 
 ```{r}
-toronto_ferry_data_df$Counts_log <- log10(toronto_ferry_data_df$Counts)
+toronto_ferry_data_df$Counts_log <- log(toronto_ferry_data_df$Counts)
 
 # In the case where a few of the Counts_log became -Inf, replace the
 # values with 0.
@@ -157,6 +180,8 @@ toronto_ferry_data_df |> ggplot(aes(x = Date, y = Counts_log)) +
                                           fill = fill),
                                           alpha = 0.2, inherit.aes = FALSE) +
   geom_line() +           # Add timeseries line
+  geom_hline(yintercept = mean(toronto_ferry_data_df$Counts_log),
+             linetype = "dashed", color = "red") +
   xlab("Timestamp") + ylab("Redemption Counts") +
   ggtitle("Log-transformed ticket redemptions for Toronto Island Ferry") +
   scale_fill_manual("", values = "lightgreen")
@@ -291,6 +316,8 @@ pacf_df |> ggplot(aes(x = lag, y = pacf)) +
   geom_ribbon(aes(ymin = -confidence_interval, ymax = confidence_interval), 
               fill = "lightblue", alpha = 0.5) +
   geom_hline(yintercept = 0) +
+  geom_hline(yintercept = mean(pacf_df$pacf),
+             linetype = "dashed", color = "red") +
   geom_segment(aes(xend = lag, yend = 0), linewidth = 1, color = "steelblue") +
   geom_point(size = 1, color = "steelblue") +
     labs(title = "Partial Auto-correlation of 1-step differencing", subtitle = "of log-transformed Departure Data",
@@ -319,7 +346,7 @@ Zach Bobbitt published on the Statology website the following information on the
 > If the [p-value](https://www.statology.org/p-values-statistical-significance/) from the test is less than some significance level (e.g. α = .05), then we can reject the null hypothesis and conclude that the time series is stationary.
 
 ```{r}
-library(tseries)
+require(tseries)
 adf_result.countsDiff <- tseries::adf.test(toronto_ferry_data_diff_df$Counts_Difference)
 adf_result.countsDiff
 ```
@@ -338,41 +365,91 @@ To access the SARIMA modelling package for R, I need to require the "forecast" l
 
 ```{r}
 require(forecast)
-sarima_model <- auto.arima(toronto_ferry_data_df$Counts_log,
-                           D = 1,
-                           max.P = 2, max.Q = 2,
+
+# For daily data with weekly patterns:
+
+toronto_ferry_ts <- ts(toronto_ferry_data_df$Counts_log, 
+                       frequency = 7)           # 7 for weekly seasonality
+
+sarima_model <- auto.arima(toronto_ferry_ts,
                            seasonal = TRUE,
                            stepwise = FALSE,
                            approximation=FALSE)
 
-summary(sarima_model)
+sarima_residuals <- checkresiduals(sarima_model)
 ```
 
-```{r}
-plot(sarima_model$residuals)
-acf(sarima_model$residuals)
-Box.test(sarima_model$residuals,
-         lag = log(length(sarima_model$residuals)),
-         type = "Ljung-Box")
-```
+Looking at the residuals from the SARIMA model, we see most of the residuals are within +/- 2.5 standard deviation from mean (0), yet there are numerous "spikes" in the data that are significantly "different" than the 2 standard deviations from the mean. These deviations could be the result of ferry closures, special events, holidays or weather related events. The Ljung-Box test has a very low p-value (0.0002813), which we would reject the null hypothesis that residuals are white noise. There's remaining autocorrelation the model isn't capturing.
 
 Now that we have built a model, let's try predicting the next 12 months using this model.
-
-scale_color_manual
 
 ```{r}
 forecasts <- forecast(sarima_model, h = 365)  # Forecast 1 year ahead
 
-autoplot(forecasts) +
-  ggtitle("Forecast of Toronto Ferry Ticket Redemptions for next year") +
-     xlab("Year") +
-     ylab("Number of Redemptions")
+# Step 2: Back-transform from log to original scale
+forecasts_original <- forecasts
+forecasts_original$mean <- exp(forecasts$mean)
+forecasts_original$lower <- exp(forecasts$lower)
+forecasts_original$upper <- exp(forecasts$upper)
+forecasts_original$x <- exp(forecasts$x)
+
+# Step 3: Create a dataframe with actual dates
+# Get the last date from your original data
+last_date <- max(toronto_ferry_data_df$Date)  # Or whatever your date column is called
+
+# Create future dates
+future_dates <- seq(last_date + 1, by = "day", length.out = 365)
+
+# Create historical dates (assuming your data starts from a known date)
+# Adjust this based on your actual start date
+start_date <- min(toronto_ferry_data_df$Date)
+historical_dates <- seq(start_date, by = "day",
+                        length.out = length(forecasts_original$x))
+
+# Step 4: Create a custom ggplot
+# Prepare data for plotting
+forecast_df <- data.frame(
+  date = future_dates,
+  forecast = exp(forecasts$mean),
+  lower80 = exp(forecasts$lower[,1]),
+  upper80 = exp(forecasts$upper[,1]),
+  lower95 = exp(forecasts$lower[,2]),
+  upper95 = exp(forecasts$upper[,2])
+)
+
+historical_df <- data.frame(
+  date = toronto_ferry_data_df$Date,
+  actual = toronto_ferry_data_df$Counts)
+
+
+# Plot
+ggplot() +
+  geom_line(data = historical_df, aes(x = date, y = actual), color = "black") +
+  geom_line(data = forecast_df, aes(x = date, y = forecast), color = "blue", size = 1) +
+  labs(title = "Forecast of Toronto Ferry Ticket Redemptions for Next Year",
+       x = "Date",
+       y = "Number of Redemptions") +
+  theme_minimal() +
+  scale_x_date(date_breaks = "6 months", date_labels = "%b %Y") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate labels
 
 ```
 
-## Using Phophet Modeling to Forecast Ticket Redemptions
+## Effectiveness of SARIMA model
 
-Phophet is an open source modeling software from Meta Corporation, that is used to model time series data to help with forecasting future trends. It is based upon a de-composable additive model where data with non-linear trends fit with seasonality trends. This information was summarized from the web article [Time Series Analysis using Facebook Prophet](https://www.geeksforgeeks.org/data-science/time-series-analysis-using-facebook-prophet/)
+The forecast plot generated using SARIMA exposes a limitation using this model. The Toronto ferry data has multiple cyclicalities. Ridership is affected by day of week where weekends and holidays experience increased ridership, but also ridership is affected by seasonality, more ridership during fair weather periods of the year like summer versus dead of winter.
+
+Unfortunately the SARIMA model is limited in handling multiple cyclicalities. SARIMA can only account for one seasonal pattern. The data has two:
+
+-   Weekly (period=7): Weekday vs weekend ridership
+
+-   Annual (period =365): Summer peaks vs winter lows
+
+When we used the SARIMA model to generate predictions, we used the forecast(sarima_model, h = 7), which accounted for the weekly period, leaving the model to mis-forecast due to annual cyclicalities.
+
+## Using Prophet Modeling to Forecast Ticket Redemptions
+
+Prophet is an open source modeling software from Meta Corporation, that is used to model time series data to help with forecasting future trends. It is based upon a de-composable additive model where data with non-linear trends fit with seasonality trends. This information was summarized from the web article [Time Series Analysis using Facebook Prophet](https://www.geeksforgeeks.org/data-science/time-series-analysis-using-facebook-prophet/)
 
 The steps to using Prophet are the following:
 
@@ -425,7 +502,7 @@ ggplot(toronto_forecast, aes(x = ds)) +
   geom_point(data = toronto_ferry_data_prophet_df,
              aes(y = y, color = "Actual"), size = 0.5) +
   scale_color_manual(values = c("Actual" = "black", "Forecast" = "blue")) +
-  scale_fill_manual(values = c("80% Interval" = "lightblue")) +
+  scale_fill_manual(values = c("80% Interval" = "cyan")) +
   labs(title = "One Year Toronto Island Ferry Ridership Forecast",
        x = "Year", 
        y = "Redemption Count",
@@ -435,13 +512,19 @@ ggplot(toronto_forecast, aes(x = ds)) +
 
 ```
 
-## Cross Validating Phophet Modeling
+The plot above shows ferry ridership between 2015 and 2026, with actual and forecast amounts. The current predictions are well within the 80% confidence band. The future predictions are shown to follow a similar pattern.
+
+## Effectiveness of Prophet model
+
+Unlike SARIMA, which can only model a single seasonal pattern, Prophet is designed to handle multiple seasonalities simultaneously. The Toronto ferry ridership data exhibits both weekly patterns (weekday vs. weekend usage) and annual patterns (summer peaks vs. winter lows) - a characteristic common in many real-world time series datasets. This makes Prophet the more appropriate modeling choice for this analysis.
+
+## Cross Validating Prophet Modeling
 
 Cross validation has several benefits when modeling time series data:
 
 -   Improved performance estimates
 -   Improved use of limited data
--   Model overfitting detection
+-   Model over-fitting detection
 -   Tests forecast horizon performance
 
 ```{r}
@@ -457,7 +540,7 @@ toronto_df_cv <- prophet::cross_validation(toronto_ferry_prophet_model,
 
 # Calculate performance metrics
 df_p <- prophet::performance_metrics(toronto_df_cv)
-print(df_p)
+head(df_p)
 ```
 
 Plot the cross validation performance metrics, focusing on performance variables that can handle 0's in the Y data. This excludes mape which when encountering 0 causes a divide by zero (Inf) data ourcome, which the builtin plotting function plot_cross_validation_metric() doesn't handle well.
@@ -472,15 +555,18 @@ require(gridExtra)
 plot_cv_coverage <- ggplot(df_p, aes(x = horizon, y = coverage)) +
   geom_line(color = "blue", linewidth = 1) +
   geom_hline(yintercept = 0.8, linetype = "dashed", color = "red") +
+  annotate("text", x=300, y=0.82, label="Ideal 80% coverage", size=2, color = "red") +
   ylim(0.5, 1) +
   labs(title = "Coverage Over Forecast Horizon",
        x = "Horizon (days)",
-       y = "Coverage",
-       subtitle = "Red line = ideal 0.8 coverage") +
+       y = "Coverage") +
   theme_minimal()
 
 plot_cv_rmse <- ggplot(df_p, aes(x = horizon, y = rmse)) +
   geom_line(color = "blue", linewidth = 1) +
+  geom_hline(yintercept = mean(df_p$rmse), linetype = "dashed", color = "red") +
+  annotate("text", x=75, y=mean(df_p$rmse)+50,
+           label="Average RMSE", size=2, color = "red") +
   labs(title = "RMSE Over Forecast Horizon",
        x = "Horizon (days)",
        y = "RMSE") +
@@ -488,6 +574,9 @@ plot_cv_rmse <- ggplot(df_p, aes(x = horizon, y = rmse)) +
 
 plot_cv_mae <- ggplot(df_p, aes(x = horizon, y = mae)) +
   geom_line(color = "blue", linewidth = 1) +
+  geom_hline(yintercept = mean(df_p$mae), linetype = "dashed", color = "red") +
+  annotate("text", x=75, y=mean(df_p$mae)+50,
+           label="Average MAE", size=2, color = "red") +
   labs(title = "MAE Over Forecast Horizon",
        x = "Horizon (days)",
        y = "MAE") +
@@ -515,3 +604,21 @@ This increase is expected: uncertainty compounds as the model forecasts further 
 ### Cross Validation MAE Plot
 
 The MAE (Mean Absolute Error) measures the average magnitude of forecast errors. The model's MAE remains relatively stable at 2,300-2,400 passengers across all forecast horizons, meaning forecasts are typically off by about 2,300-2,400 passengers per day, regardless of whether the model over-predicts or under-predicts.
+
+### Model Forecasting Conclusion
+
+Given the Coverage, RMSE and MAE data, I am pretty confident that the predictions generated using the Prophet model are reasonably accurate if forecasting up to 100 days into the future. The model does become somewhat inaccurate between 100 and 300 days, but not unacceptably. Once we look beyond 300 days into the future, the model begins to lose prediction accuracy.
+
+# Conclusion
+
+As stated in the beginning of this paper, I had four goals in performing this exercise:
+
+-   Using R and RStudio, replicate the findings of HeTianning's white paper analyzing the use of SARIMA and Prophet time series models to forecast 365 days into the future based upon historical ferry ridership data obtained from the Toronto ferry site.
+
+-   Compare the effectiveness of using SARIMA versus Prophet in developing models of the ridership time series data.
+
+-   Practice data manipulation and plotting capabilities of R and it's libraries
+
+-   Explore the use of Claude Sonnet in supporting my development of the R code. Although I interacted with Claude as support in reviewing my code and in some cases, correcting and improving it, I did not just ask Claude to write the code for me.
+
+I feel I accomplished these goals.
